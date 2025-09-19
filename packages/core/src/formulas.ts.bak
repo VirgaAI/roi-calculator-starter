@@ -1,0 +1,39 @@
+import type { RoiInputs, RoiOutputs } from './types';
+
+export function computeRoi(inputs: RoiInputs): RoiOutputs {
+  const {
+    baselineSupplySpendPerMonth,
+    disposableSavingsPct,
+    revenuePerCase,
+    // Explicit, defensible ROI drivers:
+    addedCasesPerMonth = 0,
+    overtimeSavingsPerMonth = 0,
+  } = inputs;
+
+  // Only explicit added cases drive added revenue
+  const addedRevenuePerMonth = Math.max(addedCasesPerMonth, 0) * Math.max(revenuePerCase ?? 0, 0);
+
+  // Disposable savings are a percent of baseline supply spend
+  const disposableSavingsPerMonth =
+    Math.max(baselineSupplySpendPerMonth ?? 0, 0) * Math.max(disposableSavingsPct ?? 0, 0);
+
+  // Overtime savings are passed directly (explicit user input)
+  const netBenefitPerMonth = addedRevenuePerMonth + disposableSavingsPerMonth + Math.max(overtimeSavingsPerMonth ?? 0, 0);
+
+  // ROI is net benefit divided by the baseline supply spend (non-zero floor)
+  const denom = Math.max(baselineSupplySpendPerMonth ?? 0, 1);
+  const roiMultiple = netBenefitPerMonth / denom;
+
+  const paybackMonths = netBenefitPerMonth > 0 ? Math.max(denom / netBenefitPerMonth, 0) : Infinity;
+
+  return {
+    addedCasesPerMonth,
+    addedRevenuePerMonth,
+    disposableSavingsPerMonth,
+    netBenefitPerMonth,
+    roiMultiple,
+    paybackMonths,
+  };
+}
+
+

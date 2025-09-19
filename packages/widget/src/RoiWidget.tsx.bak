@@ -1,0 +1,265 @@
+import React, { useMemo, useState } from 'react';
+// You can keep this import if your core lib is available.
+// If you get a build error on this import, comment it out and
+// the local fallback math (below) will be used.
+// import { computeRoi } from '@ospitek/roi-core';
+
+type Inputs = {
+  casesPerMonth: number;
+  procedureMinutes: number;
+  daysPerMonth: number;
+  staffHourly: number;
+  overtimeHourly: number;
+  turnoversPerDay: number;
+  turnoverMinutes: number;
+  annualProjectCost: number;
+  delayMinutesReducedPerDay: number;
+  turnoverMinutesReducedPerCase: number;
+  overtimeHoursReducedPerWeek: number;
+  baselineSupplySpendPerMonth: number;
+  wasteReductionPct: number;          // 0..1
+  throughputLiftPct: number;          // 0..1
+  capacityUptakePct: number;          // 0..1
+  cmPerCase: number;
+  throughputCasesAddedPerMonth: number;
+};
+
+type Outputs = {
+  cmPerMinute: number;
+  savedMinutesPerMonth: number;
+  extraCapacityHoursPerMonth: number;
+  throughputCasesGainedPerMonth: number;
+  cmImpactPerMonth: number;
+  laborSavingsPerMonth: number;
+  overtimeSavingsPerMonth: number;
+  supplySavingsPerMonth: number;
+  totalBenefitPerMonth: number;
+  totalBenefitPerYear: number;
+  paybackMonths: number;             // Infinity when 0
+  roiMultiple: number;               // totalBenefitYear / annualProjectCost
+  roiNetPct: number;                 // (benefit - cost) / cost
+};
+
+// ---------- Utils ----------
+const toNum = (v: string | number): number => {
+  const n = typeof v === 'number' ? v : parseFloat(v || '0');
+  return Number.isFinite(n) ? n : 0;
+};
+
+const dollars = (n: number) =>
+  Number.isFinite(n) ? `$${n.toLocaleString()}` : '$0';
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+// Local fallback math in case the core package isn’t wired.
+// It’s intentionally minimal but matches the lines shown in the demo.
+function localCompute(inputs: Inputs): Outputs {
+  const cmPerMinute =
+    inputs.procedureMinutes > 0 ? inputs.cmPerCase / inputs.procedureMinutes : 0;
+
+  // Minutes saved from explicit entries
+  const savedFromDelays = inputs.delayMinutesReducedPerDay * inputs.daysPerMonth;
+  const savedFromTurnovers =
+    inputs.turnoverMinutesReducedPerCase * inputs.casesPerMonth;
+  const savedMinutesPerMonth = savedFromDelays + savedFromTurnovers;
+
+  const extraCapacityHoursPerMonth = savedMinutesPerMonth / 60;
+
+  // Throughput gain comes from explicit “added / month”
+  // plus any capacity created * uptake%.
+  const throughputFromCapacity =
+    (extraCapacityHoursPerMonth / (inputs.procedureMinutes / 60)) *
+    clamp01(inputs.capacityUptakePct);
+  const throughputCasesGainedPerMonth =
+    toNum(inputs.throughputCasesAddedPerMonth) + (Number.isFinite(throughputFromCapacity) ? throughputFromCapacity : 0);
+
+  const cmImpactPerMonth = throughputCasesGainedPerMonth * inputs.cmPerCase;
+
+  // Labor savings: saved minutes * staff $/hr
+  const laborSavingsPerMonth = (savedMinutesPerMonth / 60) * inputs.staffHourly;
+
+  // Overtime savings: stated hours reduced * OT $/hr * ~4.33 weeks
+  const overtimeSavingsPerMonth = inputs.overtimeHoursReducedPerWeek * 4.33 * inputs.overtimeHourly;
+
+  // Supply savings: baseline * waste reduction%
+  const supplySavingsPerMonth =
+    inputs.baselineSupplySpendPerMonth * clamp01(inputs.wasteReductionPct);
+
+  const totalBenefitPerMonth =
+    cmImpactPerMonth + laborSavingsPerMonth + overtimeSavingsPerMonth + supplySavingsPerMonth;
+
+  const totalBenefitPerYear = totalBenefitPerMonth * 12;
+
+  const roiMultiple =
+    inputs.annualProjectCost > 0
+      ? totalBenefitPerYear / inputs.annualProjectCost
+      : Infinity;
+
+  const roiNetPct =
+    inputs.annualProjectCost > 0
+      ? (totalBenefitPerYear - inputs.annualProjectCost) /
+        inputs.annualProjectCost
+      : Infinity;
+
+  const paybackMonths =
+    totalBenefitPerMonth > 0
+      ? inputs.annualProjectCost / totalBenefitPerMonth
+      : Infinity;
+
+  return {
+    cmPerMinute,
+    savedMinutesPerMonth,
+    extraCapacityHoursPerMonth,
+    throughputCasesGainedPerMonth,
+    cmImpactPerMonth,
+    laborSavingsPerMonth,
+    overtimeSavingsPerMonth,
+    supplySavingsPerMonth,
+    totalBenefitPerMonth,
+    totalBenefitPerYear,
+    paybackMonths,
+    roiMultiple,
+    roiNetPct,
+  };
+}
+
+const numberField =
+  (setter: (v: number) => void) =>
+  (e: React.ChangeEvent<HTMLInputElement>) =>
+    setter(toNum(e.target.value));
+
+// ---------- Component ----------
+export function RoiWidget() {
+  const [inputs, setInputs] = useState<Inputs>({
+    casesPerMonth: 400,
+    procedureMinutes: 60,
+    daysPerMonth: 20,
+    staffHourly: 80,
+    overtimeHourly: 120,
+    turnoversPerDay: 20,
+    turnoverMinutes: 20,
+    annualProjectCost: 30000,
+    delayMinutesReducedPerDay: 0,
+    turnoverMinutesReducedPerCase: 0,
+    overtimeHoursReducedPerWeek: 0,
+    baselineSupplySpendPerMonth: 0,
+    wasteReductionPct: 0,
+    throughputLiftPct: 0,
+    capacityUptakePct: 0,
+    cmPerCase: 1500,
+    throughputCasesAddedPerMonth: 0,
+  });
+
+  const set = <K extends keyof Inputs>(key: K) =>
+    numberField((v) => setInputs((s) => ({ ...s, [key]: v })));
+
+  const zeroImpact = () =>
+    setInputs((s) => ({
+      ...s,
+      delayMinutesReducedPerDay: 0,
+      turnoverMinutesReducedPerCase: 0,
+      overtimeHoursReducedPerWeek: 0,
+      baselineSupplySpendPerMonth: 0,
+      wasteReductionPct: 0,
+      throughputLiftPct: 0,
+      capacityUptakePct: 0,
+      throughputCasesAddedPerMonth: 0,
+    }));
+
+  const restore = () =>
+    setInputs({
+      casesPerMonth: 400,
+      procedureMinutes: 60,
+      daysPerMonth: 20,
+      staffHourly: 80,
+      overtimeHourly: 120,
+      turnoversPerDay: 20,
+      turnoverMinutes: 20,
+      annualProjectCost: 30000,
+      delayMinutesReducedPerDay: 0,
+      turnoverMinutesReducedPerCase: 0,
+      overtimeHoursReducedPerWeek: 0,
+      baselineSupplySpendPerMonth: 0,
+      wasteReductionPct: 0,
+      throughputLiftPct: 0,
+      capacityUptakePct: 0,
+      cmPerCase: 1500,
+      throughputCasesAddedPerMonth: 0,
+    });
+
+  // Use core compute if available; otherwise fallback
+  const outputs: Outputs = useMemo(() => {
+    try {
+      // @ts-ignore optional dynamic import guard
+      // if (computeRoi) return computeRoi(inputs);
+      return localCompute(inputs);
+    } catch {
+      return localCompute(inputs);
+    
+  applyCapacityToThroughput: form?.applyCapacityToThroughput ?? false
+}
+  }, [inputs]);
+
+  return (
+    <div style={{ fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif', lineHeight: 1.3 }}>
+      <h2>ROI Calculator</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 320px 320px', gap: 24 }}>
+        <div>
+          <button onClick={zeroImpact}>Zero-impact baseline</button>{' '}
+          <button onClick={restore}>Restore assumptions</button>
+
+          <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+            <label>Cases / month <input type="number" value={inputs.casesPerMonth} onChange={set('casesPerMonth')} /></label>
+            <label>Turnover minutes <input type="number" value={inputs.turnoverMinutes} onChange={set('turnoverMinutes')} /></label>
+            <label>Turnovers / day <input type="number" value={inputs.turnoversPerDay} onChange={set('turnoversPerDay')} /></label>
+            <label>Staff $/hr <input type="number" value={inputs.staffHourly} onChange={set('staffHourly')} /></label>
+            <label>Annual project cost ($) <input type="number" value={inputs.annualProjectCost} onChange={set('annualProjectCost')} /></label>
+            <label>Delay min reduced / day <input type="number" value={inputs.delayMinutesReducedPerDay} onChange={set('delayMinutesReducedPerDay')} /></label>
+            <label>Waste reduction (0..1) <input type="number" step="0.01" value={inputs.wasteReductionPct} onChange={set('wasteReductionPct')} /></label>
+            <label>Throughput cases added / month <input type="number" value={inputs.throughputCasesAddedPerMonth} onChange={set('throughputCasesAddedPerMonth')} /></label>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ marginTop: 40, display: 'grid', gap: 8 }}>
+            <label>Procedure minutes <input type="number" value={inputs.procedureMinutes} onChange={set('procedureMinutes')} /></label>
+            <label>Days / month <input type="number" value={inputs.daysPerMonth} onChange={set('daysPerMonth')} /></label>
+            <label>CM per case ($) <input type="number" value={inputs.cmPerCase} onChange={set('cmPerCase')} /></label>
+            <label>Overtime $/hr <input type="number" value={inputs.overtimeHourly} onChange={set('overtimeHourly')} /></label>
+            <label>OT hrs reduced / wk <input type="number" value={inputs.overtimeHoursReducedPerWeek} onChange={set('overtimeHoursReducedPerWeek')} /></label>
+            <label>Turnover min reduced / case <input type="number" value={inputs.turnoverMinutesReducedPerCase} onChange={set('turnoverMinutesReducedPerCase')} /></label>
+            <label>Baseline supply $/mo <input type="number" value={inputs.baselineSupplySpendPerMonth} onChange={set('baselineSupplySpendPerMonth')} /></label>
+            <label>Capacity uptake (0..1) <input type="number" step="0.01" value={inputs.capacityUptakePct} onChange={set('capacityUptakePct')} /></label>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ marginTop: 40, display: 'grid', gap: 8 }}>
+            <label>Throughput lift (0..1) <input type="number" step="0.01" value={inputs.throughputLiftPct} onChange={set('throughputLiftPct')} /></label>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <h3>Results</h3>
+        <ul>
+          <li>CM/minute: <b>{dollars(outputs.cmPerMinute)}</b></li>
+          <li>Saved minutes / month: <b>{Math.round(outputs.savedMinutesPerMonth)}</b></li>
+          <li>Extra capacity (hours / month): <b>{Math.round(outputs.extraCapacityHoursPerMonth)}</b></li>
+          <li>Throughput cases gained / month: <b>{Math.round(outputs.throughputCasesGainedPerMonth)}</b></li>
+          <li>CM impact / month: <b>{dollars(Math.round(outputs.cmImpactPerMonth))}</b></li>
+          <li>Labor savings / month: <b>{dollars(Math.round(outputs.laborSavingsPerMonth))}</b></li>
+          <li>Overtime savings / month: <b>{dollars(Math.round(outputs.overtimeSavingsPerMonth))}</b></li>
+          <li>Supply savings / month: <b>{dollars(Math.round(outputs.supplySavingsPerMonth))}</b></li>
+          <li>Total benefit / month: <b>{dollars(Math.round(outputs.totalBenefitPerMonth))}</b></li>
+          <li>Total benefit / year: <b>{dollars(Math.round(outputs.totalBenefitPerYear))}</b></li>
+          <li>Payback (months): <b>{Number.isFinite(outputs.paybackMonths) ? Math.round(outputs.paybackMonths) : '∞'}</b></li>
+          <li>ROI multiple: <b>{Number.isFinite(outputs.roiMultiple) ? outputs.roiMultiple.toFixed(2) : '∞'}</b></li>
+          <li>ROI (net %): <b>{Number.isFinite(outputs.roiNetPct) ? Math.round(outputs.roiNetPct * 100) + '%' : '∞'}</b></li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+export default RoiWidget;
